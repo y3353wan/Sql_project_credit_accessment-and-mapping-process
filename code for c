@@ -1,0 +1,109 @@
+-- get all unique id_cusip
+
+create table deriv_unique_cusip as
+select distinct id_cusip
+from bond_jan_2016;
+
+
+create table deriv_rating as
+select 
+      a.*,
+      b.ig as ig_moody,
+      c.ig as ig_sp,
+      d.ig as ig_dbrs,
+      e.ig as ig_fitch,
+      (case when b.ig is not null then 1 else 0 end +
+       case when c.ig is not null then 1 else 0 end +
+       case when d.ig is not null then 1 else 0 end +
+       case when e.ig is not null then 1 else 0 end) as available_rtg_num
+from bond_jan_2016 a
+left join lt_rating_to_ig b
+on a.rtg_moody = b.rtg_moody
+left join lt_rating_to_ig c
+on a.rtg_sp = c.rtg_sp
+left join lt_rating_to_ig d
+on a.rtg_dbrs = d.rtg_dbrs
+left join lt_rating_to_ig e
+on a.rtg_fitch = e.rtg_fitch
+;
+
+
+create table deriv_rating_union as 
+select id_cusip, ig_moody as val from deriv_rating
+union
+select id_cusip, ig_sp from deriv_rating
+union
+select id_cusip, ig_dbrs from deriv_rating
+union
+select id_cusip, ig_fitch from deriv_rating
+order by id_cusip asc, val desc ;
+
+create table deriv_rating_complete as
+select *
+from deriv_rating_union
+where val is not null;
+
+
+create table deriv_rating_final as
+select
+     a.*,
+     b.availiable_num
+from deriv_rating_complete a 
+left join
+(select id_cusip, count(*) as availiable_num from deriv_rating_complete
+group by id_cusip) b
+on a.id_cusip = b.id_cusip;
+
+create table deriv_rating_real_final as
+select
+      a.id_cusip,
+      (select val
+      from deriv_rating_final b
+      where b.id_cusip = a.id_cusip
+      and b.availiable_num > 1
+      limit 1,1) as final_val
+from deriv_unique_cusip a
+where final_val is not null
+union
+select id_cusip,
+       val
+from deriv_rating_final
+where availiable_num = 1;
+
+create table deriv_rating_real_final_1 as
+select
+a.*,
+b.final_val as final_ig
+from deriv_rating a
+left join
+deriv_rating_real_final b
+on a.id_cusip = b.id_cusip;
+
+
+create table deriv_rating_real_final_2 as
+select
+a.*,
+coalesce(b.rtg_final, 'N/A') as rtg_final
+from deriv_rating_real_final_1 a
+left join
+ig_to_rating b
+on a.final_ig = b.ig;
+
+-- filling the null value blanks
+
+create table deriv_rating_report as
+select
+*,
+case
+when cntry_of_incorporation in ('US', 'CA')
+and industry_sector = 'Government'
+and rtg_final = 'N/A'
+then 'AAA'
+when cntry_of_incorporation not in ('US', 'CA')
+and industry_sector = 'Government'
+and rtg_final = 'N/A'
+then 'A'
+else rtg_final
+end as rtg_final_adj
+from deriv_rating_real_final_2 
+;
